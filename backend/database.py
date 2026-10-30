@@ -9,4 +9,5 @@ def get_db_connection():
         dbname="supply_prescript",
         user="postgres",
         password=os.environ["DB_PASSWORD"],
+        
     )
