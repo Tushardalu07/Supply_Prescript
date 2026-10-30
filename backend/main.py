@@ -4,11 +4,10 @@ from pydantic import BaseModel, Field
 app = FastAPI(title="Supply Prescript API")
 
 
-class Prescription(BaseModel):
-    patient_name: str = Field(min_length=2, max_length=100)
-    medicine_name: str = Field(min_length=2, max_length=100)
-    dosage: str = Field(min_length=1, max_length=50)
-    instructions: str = Field(min_length=1, max_length=300)
+class ShipmentData(BaseModel):
+    shipment_id: str = Field(min_length=1)
+    shipping_days: int = Field(gt=0)
+    expected_days: int = Field(gt=0)
 
 
 @app.get("/")
@@ -21,9 +20,12 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/prescriptions")
-def create_prescription(prescription: Prescription):
+@app.post("/predict/shipment-delay")
+def predict_shipment_delay(shipment: ShipmentData):
+    delayed = shipment.shipping_days > shipment.expected_days
+
     return {
-        "message": "Prescription received successfully",
-        "prescription": prescription.model_dump()
+        "shipment_id": shipment.shipment_id,
+        "predicted_delay": delayed,
+        "status": "Delayed" if delayed else "On time"
     }
