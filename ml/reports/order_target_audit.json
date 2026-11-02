@@ -1,0 +1,13 @@
+{
+    "total_valid_rows": 180519,
+    "unique_orders": 65752,
+    "orders_with_multiple_rows": 45902,
+    "orders_with_inconsistent_classification_target": 0,
+    "orders_with_inconsistent_regression_target": 0,
+    "orders_with_multiple_order_dates": 0,
+    "classification_target_values": [
+        0,
+        1
+    ],
+    "regression_target_definition": "max(actual shipping days - scheduled shipping days, 0)"
+}
