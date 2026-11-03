@@ -42,3 +42,17 @@ def filter_pareto_optimal_actions(
             for other in options
         )
     ]
+
+
+def recommend_actions(
+    options: list[ActionOption],
+    budget: float,
+    max_delivery_days: int,
+) -> list[ActionOption]:
+    """Return feasible actions on the cost/time Pareto frontier."""
+    feasible_options = filter_feasible_actions(
+        options,
+        budget=budget,
+        max_delivery_days=max_delivery_days,
+    )
+    return filter_pareto_optimal_actions(feasible_options)
