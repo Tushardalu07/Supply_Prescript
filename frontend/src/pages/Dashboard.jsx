@@ -11,7 +11,24 @@ export default function Dashboard() {
   const [alerts, setAlerts] = useState([]);
   const [filter, setFilter] = useState("All");
 
-  useEffect(() => { getAlerts().then(setAlerts); }, []);
+  useEffect(() => {
+  getAlerts()
+    .then((data) => {
+      const shipments = Array.isArray(data) ? data : [];
+      setAlerts(
+        shipments.map((s) => ({
+          ...s,
+          product: s.shipment_id,
+          supplier: "Shipment",
+          risk_level: s.shipping_days > s.expected_days ? "High" : "Low",
+          expected_delay_days: Math.max(0, s.shipping_days - s.expected_days),
+          delay_probability:
+            s.shipping_days > s.expected_days ? 0.8 : 0.2,
+        }))
+      );
+    })
+    .catch((error) => console.error("Failed to load shipments:", error));
+}, []);
 
   const shown = filter === "All" ? alerts : alerts.filter((a) => a.risk_level === filter);
   const high = alerts.filter((a) => a.risk_level === "High").length;

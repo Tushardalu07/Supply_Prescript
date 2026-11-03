@@ -98,3 +98,31 @@ def create_shipment(shipment: ShipmentCreate):
             status_code=500,
             detail="Database error while creating shipment"
         )
+
+@app.delete("/shipments/{shipment_id}")
+def delete_shipment(shipment_id: str):
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM shipments WHERE shipment_id = %s RETURNING shipment_id",
+                    (shipment_id,)
+                )
+                deleted = cur.fetchone()
+
+                if not deleted:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Shipment not found"
+                    )
+
+        return {
+            "message": "Shipment deleted successfully",
+            "shipment_id": deleted[0]
+        }
+
+    except psycopg.Error:
+        raise HTTPException(
+            status_code=500,
+            detail="Database error while deleting shipment"
+        )
