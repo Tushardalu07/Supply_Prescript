@@ -2,6 +2,7 @@ from backend.optimization import (
     ActionOption,
     filter_feasible_actions,
     filter_pareto_optimal_actions,
+    recommend_actions,
 )
 
 
@@ -51,3 +52,30 @@ def test_pareto_filter_keeps_equivalent_options():
     second = ActionOption(2, "Supplier B", 10000, 4)
 
     assert filter_pareto_optimal_actions([first, second]) == [first, second]
+
+
+def test_recommends_only_feasible_pareto_actions():
+    options = [
+        ActionOption(1, "Air Freight", 15000, 2),
+        ActionOption(2, "Secondary Supplier", 12000, 5),
+        ActionOption(3, "Delay Launch", 0, 14),
+        ActionOption(4, "Over budget", 16000, 1),
+        ActionOption(5, "Dominated", 14000, 6),
+    ]
+
+    recommendations = recommend_actions(
+        options,
+        budget=15000,
+        max_delivery_days=14,
+    )
+
+    assert recommendations == options[:3]
+
+
+def test_recommends_no_actions_when_none_are_feasible():
+    options = [
+        ActionOption(1, "Air Freight", 15000, 2),
+        ActionOption(2, "Secondary Supplier", 12000, 5),
+    ]
+
+    assert recommend_actions(options, budget=10000, max_delivery_days=3) == []
