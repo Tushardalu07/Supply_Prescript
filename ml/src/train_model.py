@@ -37,10 +37,12 @@ DATA_PATH = ML_DIR / "data" / "raw" / "DataCoSupplyChainDataset.csv"
 ARTIFACT_DIR = ML_DIR / "artifacts"
 REPORT_DIR = ML_DIR / "reports"
 
+ORDER_COL = "Order Id"
 DATE_COL = "order date (DateOrders)"
 LABEL_COL = "Late_delivery_risk"
 ACTUAL_DAYS_COL = "Days for shipping (real)"
 SCHEDULED_DAYS_COL = "Days for shipment (scheduled)"
+STATUS_COL = "Delivery Status"
 
 RANDOM_STATE = 42
 TEST_FRACTION = 0.20
@@ -56,7 +58,7 @@ REPORT_DIR.mkdir(parents=True, exist_ok=True)
 def load_data():
     if not DATA_PATH.exists():
         raise FileNotFoundError(
-            f"Dataset not found: {DATA_PATH}\n"
+            f"Dataset not found: {DATA_PATH}\\n"
             "Place DataCoSupplyChainDataset.csv inside "
             "ml/data/raw/."
         )
@@ -73,16 +75,18 @@ def load_data():
     df.columns = df.columns.astype(str).str.strip()
 
     required = [
+        ORDER_COL,
         DATE_COL,
         LABEL_COL,
         ACTUAL_DAYS_COL,
         SCHEDULED_DAYS_COL,
+        STATUS_COL,
     ]
 
     missing = [col for col in required if col not in df.columns]
     if missing:
         raise ValueError(
-            f"Missing required columns: {missing}\n"
+            f"Missing required columns: {missing}\\n"
             f"Available columns: {df.columns.tolist()}"
         )
 
@@ -103,19 +107,33 @@ def load_data():
     ]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
+    # Normalize delivery status before filtering.
+    df[STATUS_COL] = (
+        df[STATUS_COL].astype("string").str.strip()
+    )
+
     # Remove records that cannot support training.
     df = df.dropna(
         subset=[
+            ORDER_COL,
             DATE_COL,
             LABEL_COL,
             ACTUAL_DAYS_COL,
             SCHEDULED_DAYS_COL,
+            STATUS_COL,
         ]
     ).copy()
 
     # Retain valid binary labels only.
     df = df[df[LABEL_COL].isin([0, 1])].copy()
     df[LABEL_COL] = df[LABEL_COL].astype(int)
+
+    # Exclude cancelled shipments from both model populations.
+    cancelled_mask = (
+        df[STATUS_COL].str.casefold() == "shipping canceled"
+    )
+    cancelled_rows_excluded = int(cancelled_mask.sum())
+    df = df.loc[~cancelled_mask].copy()
 
     # Remove exact duplicate rows.
     df = df.drop_duplicates().copy()
@@ -138,11 +156,13 @@ def load_data():
     df["order_month"] = df[DATE_COL].dt.month
     df["order_dayofweek"] = df[DATE_COL].dt.dayofweek
 
+    print(f"Cancelled rows excluded: {cancelled_rows_excluded:,}")
     print(f"Rows after cleaning: {len(df):,}")
-    print("\nClass distribution:")
+    print(f"Eligible unique orders: {df[ORDER_COL].nunique():,}")
+    print("\\nClass distribution:")
     print(df[LABEL_COL].value_counts().sort_index())
 
-    return df
+    return df, cancelled_rows_excluded
 
 
 # ---------------------------------------------------------
@@ -285,25 +305,84 @@ def build_preprocessor(numeric_cols, categorical_cols):
 # ---------------------------------------------------------
 
 def main():
-    df = load_data()
+    df, cancelled_rows_excluded = load_data()
 
     # Features and targets are created from the SAME sorted dataframe.
     X, y_class, y_days, numeric_cols, categorical_cols = (
         select_features(df)
     )
 
-    # Chronological 80/20 split: older records train the models;
-    # newer records are held out for evaluation.
-    split_index = int(len(df) * (1 - TEST_FRACTION))
+    # -----------------------------------------------------
+    # ORDER-AWARE CHRONOLOGICAL 80/20 SPLIT
+    # -----------------------------------------------------
 
-    X_train = X.iloc[:split_index].copy()
-    X_test = X.iloc[split_index:].copy()
+    # Each Order Id must have one consistent target. This repeats
+    # the critical audit as a guard inside the training pipeline.
+    target_audit = df.groupby(ORDER_COL).agg(
+        class_values=(LABEL_COL, "nunique"),
+        days_late_values=("days_late_target", "nunique"),
+    )
 
-    yc_train = y_class.iloc[:split_index].copy()
-    yc_test = y_class.iloc[split_index:].copy()
+    inconsistent_class_orders = int(
+        (target_audit["class_values"] > 1).sum()
+    )
+    inconsistent_regression_orders = int(
+        (target_audit["days_late_values"] > 1).sum()
+    )
 
-    yd_train = y_days.iloc[:split_index].copy()
-    yd_test = y_days.iloc[split_index:].copy()
+    if inconsistent_class_orders or inconsistent_regression_orders:
+        raise ValueError(
+            "Inconsistent targets found within orders: "
+            f"classification={inconsistent_class_orders}, "
+            f"regression={inconsistent_regression_orders}."
+        )
+
+    # Sort unique orders by their order date, then split the order IDs.
+    # All item rows for an order are assigned to the same partition.
+    order_dates = (
+        df.groupby(ORDER_COL)[DATE_COL]
+        .min()
+        .sort_values(kind="stable")
+    )
+
+    split_index = int(len(order_dates) * (1 - TEST_FRACTION))
+    if split_index <= 0 or split_index >= len(order_dates):
+        raise ValueError("Invalid order-aware split boundary.")
+
+    train_order_ids = set(order_dates.index[:split_index])
+    test_order_ids = set(order_dates.index[split_index:])
+
+    train_mask = df[ORDER_COL].isin(train_order_ids)
+    test_mask = df[ORDER_COL].isin(test_order_ids)
+
+    # Fail fast if any row is missing or assigned to both partitions.
+    if (train_mask & test_mask).any():
+        raise AssertionError("A row appears in both training and testing sets.")
+    if not (train_mask | test_mask).all():
+        raise AssertionError("Some rows were not assigned to a data split.")
+
+    overlapping_orders = train_order_ids.intersection(test_order_ids)
+    if overlapping_orders:
+        raise AssertionError(
+            f"Order leakage detected: {len(overlapping_orders)} overlapping orders."
+        )
+
+    # Apply the exact same row masks to features and both targets.
+    X_train = X.loc[train_mask].copy()
+    X_test = X.loc[test_mask].copy()
+    yc_train = y_class.loc[train_mask].copy()
+    yc_test = y_class.loc[test_mask].copy()
+    yd_train = y_days.loc[train_mask].copy()
+    yd_test = y_days.loc[test_mask].copy()
+    test_order_ids_by_row = df.loc[test_mask, ORDER_COL].copy()
+
+    training_end = df.loc[train_mask, DATE_COL].max()
+    testing_start = df.loc[test_mask, DATE_COL].min()
+
+    if training_end > testing_start:
+        raise AssertionError(
+            "Chronological split failed: a training order is later than a test order."
+        )
 
     if yc_train.nunique() < 2:
         raise ValueError(
@@ -311,15 +390,27 @@ def main():
             "Check label distribution or the chronological split."
         )
 
+    if yc_test.nunique() < 2:
+        print(
+            "WARNING: Test partition contains only one class; "
+            "ROC-AUC will be unavailable."
+        )
+
     print("\n" + "=" * 60)
     print("SUPPLYPRESCRIPT - XGBOOST MODEL TRAINING")
     print("=" * 60)
-    print(f"Training rows: {len(X_train):,}")
-    print(f"Test rows:     {len(X_test):,}")
-    print(f"Training period: {df[DATE_COL].iloc[0]} "
-          f"to {df[DATE_COL].iloc[split_index - 1]}")
-    print(f"Test period:     {df[DATE_COL].iloc[split_index]} "
-          f"to {df[DATE_COL].iloc[-1]}")
+    print("ORDER-AWARE SPLIT VALIDATION")
+    print(f"Total unique orders: {len(order_dates):,}")
+    print(f"Training orders:    {len(train_order_ids):,}")
+    print(f"Testing orders:     {len(test_order_ids):,}")
+    print(f"Overlapping orders: {len(overlapping_orders)}")
+    print(f"Training rows:      {len(X_train):,}")
+    print(f"Testing rows:       {len(X_test):,}")
+    print(f"Training period:    {df.loc[train_mask, DATE_COL].min()} to {training_end}")
+    print(f"Testing period:     {testing_start} to {df.loc[test_mask, DATE_COL].max()}")
+    print("Order target consistency: PASSED")
+    print("Order overlap check:      PASSED")
+    print("Chronological check:      PASSED")
 
     # -----------------------------------------------------
     # 5A. DELAY-RISK CLASSIFIER
@@ -486,10 +577,23 @@ def main():
         "project": "SupplyPrescript",
         "model_version": "xgboost-v1",
         "dataset": DATA_PATH.name,
-        "split_strategy": "chronological",
+        "training_scope": "non_cancelled_shipments_only",
+        "cancelled_rows_excluded": int(cancelled_rows_excluded),
+        "split_strategy": "order_aware_chronological",
         "train_fraction": 1 - TEST_FRACTION,
         "train_rows": int(len(X_train)),
         "test_rows": int(len(X_test)),
+        "total_orders": int(len(order_dates)),
+        "train_orders": int(len(train_order_ids)),
+        "test_orders": int(len(test_order_ids)),
+        "overlapping_orders": int(len(overlapping_orders)),
+        "training_end_date": str(training_end),
+        "testing_start_date": str(testing_start),
+        "chronological_order": True,
+        "order_target_consistency": {
+            "inconsistent_classification_orders": inconsistent_class_orders,
+            "inconsistent_regression_orders": inconsistent_regression_orders,
+        },
         "features": list(X.columns),
         "classification": classifier_metrics,
         "regression": regression_metrics,
@@ -501,6 +605,7 @@ def main():
 
     predictions = pd.DataFrame(
         {
+            "order_id": test_order_ids_by_row.to_numpy(),
             "actual_late_risk": yc_test.to_numpy(),
             "predicted_late_risk": class_predictions,
             "delay_probability": class_probabilities,
