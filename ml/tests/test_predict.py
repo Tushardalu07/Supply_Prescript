@@ -1,4 +1,4 @@
-
+﻿
 import ast
 import math
 import subprocess
@@ -92,3 +92,78 @@ class TestShipmentPrediction(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+# Additional prediction input validation tests
+
+import pytest
+
+from ml.src.predict import (
+    EXPECTED_FEATURES,
+    predict_shipment,
+    validate_shipment,
+)
+
+
+@pytest.fixture
+def sample_shipment():
+    return {
+        "Type": "DEBIT",
+        "Category Id": 10,
+        "Category Name": "Accessories",
+        "Customer Segment": "Consumer",
+        "Department Id": 5,
+        "Department Name": "Golf",
+        "Market": "USCA",
+        "Order Item Discount": 5.0,
+        "Order Item Discount Rate": 0.05,
+        "Order Item Product Price": 100.0,
+        "Order Item Quantity": 1,
+        "Product Category Id": 10,
+        "Product Price": 100.0,
+        "Shipping Mode": "Standard Class",
+        "order_month": 10,
+        "order_dayofweek": 2,
+    }
+
+
+def test_valid_input_has_exact_training_features(sample_shipment):
+    result = validate_shipment(sample_shipment)
+    assert list(result.keys()) == EXPECTED_FEATURES
+
+
+def test_missing_feature_is_rejected(sample_shipment):
+    sample_shipment.pop("Shipping Mode")
+    with pytest.raises(ValueError, match="Missing required"):
+        predict_shipment(sample_shipment)
+
+
+def test_extra_features_are_ignored(sample_shipment):
+    sample_shipment["Unexpected Column"] = "extra"
+    result = validate_shipment(sample_shipment)
+    assert "Unexpected Column" not in result
+
+
+def test_prediction_output_is_valid(sample_shipment):
+    result = predict_shipment(sample_shipment)
+    assert 0 <= result["delay_probability"] <= 1
+    assert result["predicted_days_late"] >= 0
+    assert result["risk_category"] in ["Low", "Medium", "High"]
+    assert result["model_version"] == "xgboost-v2"
+
+
+def test_non_dictionary_input_is_rejected():
+    with pytest.raises(TypeError):
+        validate_shipment(["invalid"])
+def test_classification_threshold_is_loaded():
+    from ml.src.predict import CLASSIFICATION_THRESHOLD
+
+    assert CLASSIFICATION_THRESHOLD == 0.35
+
+
+def test_prediction_contains_binary_late_risk():
+    from ml.src.predict import predict_shipment
+
+    result = predict_shipment(valid_shipment)
+
+    assert result["predicted_late_risk"] in (0, 1)
+    assert result["classification_threshold"] == 0.35

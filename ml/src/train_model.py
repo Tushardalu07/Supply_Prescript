@@ -46,6 +46,7 @@ STATUS_COL = "Delivery Status"
 
 RANDOM_STATE = 42
 TEST_FRACTION = 0.20
+VALIDATION_FRACTION = 0.10
 
 ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -313,16 +314,13 @@ def main():
     )
 
     # -----------------------------------------------------
-    # ORDER-AWARE CHRONOLOGICAL 80/20 SPLIT
+    # ORDER-AWARE CHRONOLOGICAL 70/10/20 SPLIT
     # -----------------------------------------------------
 
-    # Each Order Id must have one consistent target. This repeats
-    # the critical audit as a guard inside the training pipeline.
     target_audit = df.groupby(ORDER_COL).agg(
         class_values=(LABEL_COL, "nunique"),
         days_late_values=("days_late_target", "nunique"),
     )
-
     inconsistent_class_orders = int(
         (target_audit["class_values"] > 1).sum()
     )
@@ -337,59 +335,86 @@ def main():
             f"regression={inconsistent_regression_orders}."
         )
 
-    # Sort unique orders by their order date, then split the order IDs.
-    # All item rows for an order are assigned to the same partition.
+    # Sort unique orders by their first order date. All item rows
+    # belonging to an order are kept in the same partition.
     order_dates = (
         df.groupby(ORDER_COL)[DATE_COL]
         .min()
         .sort_values(kind="stable")
     )
+    total_orders = len(order_dates)
 
-    split_index = int(len(order_dates) * (1 - TEST_FRACTION))
-    if split_index <= 0 or split_index >= len(order_dates):
-        raise ValueError("Invalid order-aware split boundary.")
+    test_start_index = int(total_orders * (1 - TEST_FRACTION))
+    validation_start_index = int(
+        total_orders * (1 - TEST_FRACTION - VALIDATION_FRACTION)
+    )
 
-    train_order_ids = set(order_dates.index[:split_index])
-    test_order_ids = set(order_dates.index[split_index:])
+    if not (
+        0 < validation_start_index < test_start_index < total_orders
+    ):
+        raise ValueError("Invalid chronological split boundaries.")
+
+    train_order_ids = set(order_dates.index[:validation_start_index])
+    validation_order_ids = set(
+        order_dates.index[validation_start_index:test_start_index]
+    )
+    test_order_ids = set(order_dates.index[test_start_index:])
 
     train_mask = df[ORDER_COL].isin(train_order_ids)
+    validation_mask = df[ORDER_COL].isin(validation_order_ids)
     test_mask = df[ORDER_COL].isin(test_order_ids)
 
-    # Fail fast if any row is missing or assigned to both partitions.
-    if (train_mask & test_mask).any():
-        raise AssertionError("A row appears in both training and testing sets.")
-    if not (train_mask | test_mask).all():
-        raise AssertionError("Some rows were not assigned to a data split.")
-
-    overlapping_orders = train_order_ids.intersection(test_order_ids)
-    if overlapping_orders:
+    assignment_count = (
+        train_mask.astype(int)
+        + validation_mask.astype(int)
+        + test_mask.astype(int)
+    )
+    if not assignment_count.eq(1).all():
         raise AssertionError(
-            f"Order leakage detected: {len(overlapping_orders)} overlapping orders."
+            "Rows are missing from or duplicated across partitions."
         )
 
-    # Apply the exact same row masks to features and both targets.
+    overlap_count = (
+        len(train_order_ids.intersection(validation_order_ids))
+        + len(train_order_ids.intersection(test_order_ids))
+        + len(validation_order_ids.intersection(test_order_ids))
+    )
+    if overlap_count:
+        raise AssertionError("Order leakage detected.")
+
     X_train = X.loc[train_mask].copy()
+    X_validation = X.loc[validation_mask].copy()
     X_test = X.loc[test_mask].copy()
+
     yc_train = y_class.loc[train_mask].copy()
+    yc_validation = y_class.loc[validation_mask].copy()
     yc_test = y_class.loc[test_mask].copy()
+
     yd_train = y_days.loc[train_mask].copy()
+    yd_validation = y_days.loc[validation_mask].copy()
     yd_test = y_days.loc[test_mask].copy()
+
     test_order_ids_by_row = df.loc[test_mask, ORDER_COL].copy()
 
+    training_start = df.loc[train_mask, DATE_COL].min()
     training_end = df.loc[train_mask, DATE_COL].max()
+    validation_start = df.loc[validation_mask, DATE_COL].min()
+    validation_end = df.loc[validation_mask, DATE_COL].max()
     testing_start = df.loc[test_mask, DATE_COL].min()
+    testing_end = df.loc[test_mask, DATE_COL].max()
 
-    if training_end > testing_start:
+    if not (
+        training_end <= validation_start
+        and validation_end <= testing_start
+    ):
         raise AssertionError(
-            "Chronological split failed: a training order is later than a test order."
+            "Chronological partition order is invalid."
         )
 
     if yc_train.nunique() < 2:
-        raise ValueError(
-            "The training portion has only one class. "
-            "Check label distribution or the chronological split."
-        )
-
+        raise ValueError("Training partition contains only one class.")
+    if yc_validation.nunique() < 2:
+        raise ValueError("Validation partition contains only one class.")
     if yc_test.nunique() < 2:
         print(
             "WARNING: Test partition contains only one class; "
@@ -399,18 +424,20 @@ def main():
     print("\n" + "=" * 60)
     print("SUPPLYPRESCRIPT - XGBOOST MODEL TRAINING")
     print("=" * 60)
-    print("ORDER-AWARE SPLIT VALIDATION")
-    print(f"Total unique orders: {len(order_dates):,}")
-    print(f"Training orders:    {len(train_order_ids):,}")
-    print(f"Testing orders:     {len(test_order_ids):,}")
-    print(f"Overlapping orders: {len(overlapping_orders)}")
-    print(f"Training rows:      {len(X_train):,}")
-    print(f"Testing rows:       {len(X_test):,}")
-    print(f"Training period:    {df.loc[train_mask, DATE_COL].min()} to {training_end}")
-    print(f"Testing period:     {testing_start} to {df.loc[test_mask, DATE_COL].max()}")
-    print("Order target consistency: PASSED")
-    print("Order overlap check:      PASSED")
+    print("ORDER-AWARE CHRONOLOGICAL SPLIT VALIDATION")
+    print(f"Total unique orders:      {total_orders:,}")
+    print(f"Training orders:          {len(train_order_ids):,}")
+    print(f"Validation orders:        {len(validation_order_ids):,}")
+    print(f"Testing orders:           {len(test_order_ids):,}")
+    print(f"Training rows:            {len(X_train):,}")
+    print(f"Validation rows:          {len(X_validation):,}")
+    print(f"Testing rows:             {len(X_test):,}")
+    print(f"Training period:          {training_start} to {training_end}")
+    print(f"Validation period:        {validation_start} to {validation_end}")
+    print(f"Testing period:           {testing_start} to {testing_end}")
+    print("Order leakage check:      PASSED")
     print("Chronological check:      PASSED")
+    print("Target consistency check: PASSED")
 
     # -----------------------------------------------------
     # 5A. DELAY-RISK CLASSIFIER
@@ -445,32 +472,75 @@ def main():
 
     classifier.fit(X_train, yc_train)
 
-    class_predictions = classifier.predict(X_test).astype(int)
+    # Select the binary decision threshold using validation data only.
+    validation_probabilities = classifier.predict_proba(
+        X_validation
+    )[:, 1]
+
+    threshold_candidates = np.round(
+        np.arange(0.20, 0.801, 0.01),
+        2,
+    )
+    validation_f1_scores = []
+
+    for threshold in threshold_candidates:
+        validation_predictions = (
+            validation_probabilities >= threshold
+        ).astype(int)
+        validation_f1_scores.append(
+            f1_score(
+                yc_validation,
+                validation_predictions,
+                zero_division=0,
+            )
+        )
+
+    best_validation_f1 = float(max(validation_f1_scores))
+    best_indices = [
+        i for i, score in enumerate(validation_f1_scores)
+        if np.isclose(score, best_validation_f1)
+    ]
+    # If F1 ties, prefer the higher threshold.
+    best_index = max(
+        best_indices,
+        key=lambda i: threshold_candidates[i],
+    )
+    classification_threshold = float(
+        threshold_candidates[best_index]
+    )
+
+    print("\nVALIDATION THRESHOLD SELECTION")
+    print("-" * 40)
+    print("Selection metric: F1-score")
+    print(f"Selected threshold: {classification_threshold:.2f}")
+    print(f"Best validation F1: {best_validation_f1:.4f}")
+
+    # Evaluate once on the untouched final test partition.
     class_probabilities = classifier.predict_proba(X_test)[:, 1]
+    class_predictions = (
+        class_probabilities >= classification_threshold
+    ).astype(int)
 
     classifier_metrics = {
+        "decision_threshold": classification_threshold,
+        "threshold_selection": "validation_maximum_f1",
+        "validation_best_f1": best_validation_f1,
         "accuracy": float(
             accuracy_score(yc_test, class_predictions)
         ),
         "precision": float(
             precision_score(
-                yc_test,
-                class_predictions,
-                zero_division=0,
+                yc_test, class_predictions, zero_division=0
             )
         ),
         "recall": float(
             recall_score(
-                yc_test,
-                class_predictions,
-                zero_division=0,
+                yc_test, class_predictions, zero_division=0
             )
         ),
         "f1_score": float(
             f1_score(
-                yc_test,
-                class_predictions,
-                zero_division=0,
+                yc_test, class_predictions, zero_division=0
             )
         ),
         "confusion_matrix": confusion_matrix(
@@ -482,7 +552,10 @@ def main():
             yc_test,
             class_predictions,
             labels=[0, 1],
-            target_names=["On-time/low-risk label", "Late-risk label"],
+            target_names=[
+                "On-time/low-risk label",
+                "Late-risk label",
+            ],
             output_dict=True,
             zero_division=0,
         ),
@@ -498,9 +571,8 @@ def main():
     print("\nCLASSIFICATION RESULTS")
     print("-" * 40)
     for metric, value in classifier_metrics.items():
-        if metric == "classification_report":
-            continue
-        print(f"{metric}: {value}")
+        if metric != "classification_report":
+            print(f"{metric}: {value}")
 
     # -----------------------------------------------------
     # 5B. DAYS-LATE REGRESSOR
@@ -561,13 +633,25 @@ def main():
 
     classifier_path = ARTIFACT_DIR / "delay_classifier.joblib"
     regressor_path = ARTIFACT_DIR / "days_late_regressor.joblib"
+    metadata_path = ARTIFACT_DIR / "model_metadata.json"
 
     joblib.dump(classifier, classifier_path)
     joblib.dump(regressor, regressor_path)
 
-    print("\nModels saved:")
+    model_metadata = {
+        "model_version": "xgboost-v2",
+        "classification_threshold": classification_threshold,
+        "threshold_selection": "validation_maximum_f1",
+        "features": list(X.columns),
+        "split_strategy": "order_aware_chronological_70_10_20",
+    }
+    with open(metadata_path, "w", encoding="utf-8") as file:
+        json.dump(model_metadata, file, indent=2)
+
+    print("\nModels and metadata saved:")
     print(f"  Classifier: {classifier_path}")
     print(f"  Regressor:  {regressor_path}")
+    print(f"  Metadata:   {metadata_path}")
 
     # -----------------------------------------------------
     # 7. SAVE METRICS AND TEST PREDICTIONS
@@ -575,21 +659,38 @@ def main():
 
     metrics = {
         "project": "SupplyPrescript",
-        "model_version": "xgboost-v1",
+        "model_version": "xgboost-v2",
         "dataset": DATA_PATH.name,
         "training_scope": "non_cancelled_shipments_only",
         "cancelled_rows_excluded": int(cancelled_rows_excluded),
-        "split_strategy": "order_aware_chronological",
-        "train_fraction": 1 - TEST_FRACTION,
+        "split_strategy": "order_aware_chronological_70_10_20",
+        "train_fraction": 0.70,
+        "validation_fraction": VALIDATION_FRACTION,
+        "test_fraction": TEST_FRACTION,
         "train_rows": int(len(X_train)),
+        "validation_rows": int(len(X_validation)),
         "test_rows": int(len(X_test)),
-        "total_orders": int(len(order_dates)),
+        "total_orders": int(total_orders),
         "train_orders": int(len(train_order_ids)),
+        "validation_orders": int(len(validation_order_ids)),
         "test_orders": int(len(test_order_ids)),
-        "overlapping_orders": int(len(overlapping_orders)),
+        "overlapping_orders": int(overlap_count),
+        "training_start_date": str(training_start),
         "training_end_date": str(training_end),
+        "validation_start_date": str(validation_start),
+        "validation_end_date": str(validation_end),
         "testing_start_date": str(testing_start),
+        "testing_end_date": str(testing_end),
         "chronological_order": True,
+        "threshold_selection": {
+            "method": "maximum_validation_f1",
+            "selected_threshold": classification_threshold,
+            "best_validation_f1": best_validation_f1,
+            "candidate_min": float(threshold_candidates.min()),
+            "candidate_max": float(threshold_candidates.max()),
+            "candidate_step": 0.01,
+            "tie_break": "higher_threshold",
+        },
         "order_target_consistency": {
             "inconsistent_classification_orders": inconsistent_class_orders,
             "inconsistent_regression_orders": inconsistent_regression_orders,
@@ -602,6 +703,29 @@ def main():
     metrics_path = REPORT_DIR / "metrics.json"
     with open(metrics_path, "w", encoding="utf-8") as file:
         json.dump(metrics, file, indent=2)
+
+    split_audit = {
+        "split_strategy": "order_aware_chronological_70_10_20",
+        "total_orders": int(total_orders),
+        "train_orders": int(len(train_order_ids)),
+        "validation_orders": int(len(validation_order_ids)),
+        "test_orders": int(len(test_order_ids)),
+        "train_rows": int(len(X_train)),
+        "validation_rows": int(len(X_validation)),
+        "test_rows": int(len(X_test)),
+        "overlapping_orders": int(overlap_count),
+        "training_start": str(training_start),
+        "training_end": str(training_end),
+        "validation_start": str(validation_start),
+        "validation_end": str(validation_end),
+        "testing_start": str(testing_start),
+        "testing_end": str(testing_end),
+        "chronological_order": True,
+        "order_target_consistency": True,
+    }
+    split_audit_path = REPORT_DIR / "order_split_validation.json"
+    with open(split_audit_path, "w", encoding="utf-8") as file:
+        json.dump(split_audit, file, indent=2)
 
     predictions = pd.DataFrame(
         {
@@ -620,6 +744,7 @@ def main():
     print("\nReports saved:")
     print(f"  Metrics:     {metrics_path}")
     print(f"  Predictions: {predictions_path}")
+    print(f"  Split audit: {split_audit_path}")
 
     print("\n" + "=" * 60)
     print("TRAINING COMPLETED SUCCESSFULLY")
