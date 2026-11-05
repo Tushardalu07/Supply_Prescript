@@ -84,10 +84,10 @@ class TestShipmentPrediction(unittest.TestCase):
         )
 
     def test_model_version(self):
-        self.assertEqual(
-            self.prediction["model_version"],
-            "xgboost-v1",
-        )
+       self.assertEqual(
+           self.prediction["model_version"],
+           "xgboost-v2",
+    )
 
 
 if __name__ == "__main__":
@@ -161,9 +161,32 @@ def test_classification_threshold_is_loaded():
 
 
 def test_prediction_contains_binary_late_risk():
-    from ml.src.predict import predict_shipment
+    from ml.src.predict import (
+        predict_shipment,
+        CLASSIFICATION_THRESHOLD,
+    )
 
-    result = predict_shipment(valid_shipment)
+    shipment = {
+        "Type": "DEBIT",
+        "Category Id": 10,
+        "Category Name": "Accessories",
+        "Customer Segment": "Consumer",
+        "Department Id": 5,
+        "Department Name": "Golf",
+        "Market": "USCA",
+        "Order Item Discount": 5.0,
+        "Order Item Discount Rate": 0.05,
+        "Order Item Product Price": 100.0,
+        "Order Item Quantity": 1,
+        "Product Category Id": 10,
+        "Product Price": 100.0,
+        "Shipping Mode": "Standard Class",
+        "order_month": 10,
+        "order_dayofweek": 2,
+    }
+
+    result = predict_shipment(shipment)
 
     assert result["predicted_late_risk"] in (0, 1)
-    assert result["classification_threshold"] == 0.35
+    assert result["classification_threshold"] == CLASSIFICATION_THRESHOLD
+    assert result["model_version"] == "xgboost-v2"
