@@ -1,8 +1,32 @@
+@'
+# Python
 .venv/
-_pycache_/
-*.pyc
-.env
-
-_pycache_/
+__pycache__/
 *.py[cod]
-.venv/
+.pytest_cache/
+
+# Secrets
+.env
+.env.*
+
+# Local datasets
+ml/data/raw/*
+ml/data/processed/*
+
+# Generated model artifacts and reports
+ml/artifacts/*
+ml/reports/*
+
+# Keep placeholder files
+!ml/data/raw/.gitkeep
+!ml/data/processed/.gitkeep
+!ml/artifacts/.gitkeep
+!ml/reports/.gitkeep
+
+# Keep ML evaluation documentation
+!ml/reports/model_evaluation.md
+
+# Node
+frontend/node_modules/
+frontend/dist/
+'@ | Set-Content -Path .gitignore -Encoding utf8
