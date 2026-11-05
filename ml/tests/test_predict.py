@@ -190,3 +190,34 @@ def test_prediction_contains_binary_late_risk():
     assert result["predicted_late_risk"] in (0, 1)
     assert result["classification_threshold"] == CLASSIFICATION_THRESHOLD
     assert result["model_version"] == "xgboost-v2"
+
+from unittest.mock import patch
+import numpy as np
+
+
+@pytest.mark.parametrize(
+    "probability, expected_risk",
+    [
+        (0.3499, "Low"),
+        (0.3500, "Medium"),
+        (0.6999, "Medium"),
+        (0.7000, "High"),
+    ],
+)
+def test_risk_category_boundaries(
+    sample_shipment,
+    probability,
+    expected_risk,
+):
+    with patch(
+        "ml.src.predict.classifier.predict_proba",
+        return_value=np.array(
+            [[1 - probability, probability]]
+        ),
+    ):
+        result = predict_shipment(sample_shipment)
+
+    assert result["risk_category"] == expected_risk
+    assert result["predicted_late_risk"] == int(
+        probability >= 0.35
+    )

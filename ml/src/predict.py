@@ -121,10 +121,10 @@ def predict_shipment(shipment: dict) -> dict:
         float(regressor.predict(row)[0]),
     )
 
-    # Risk bands remain separate from the binary threshold.
+    # Risk categories aligned with the classification threshold.
     if probability >= 0.70:
         risk = "High"
-    elif probability >= 0.40:
+    elif probability >= CLASSIFICATION_THRESHOLD:
         risk = "Medium"
     else:
         risk = "Low"
@@ -137,6 +137,7 @@ def predict_shipment(shipment: dict) -> dict:
         "risk_category": risk,
         "model_version": MODEL_VERSION,
     }
+
 
 
 # ---------------------------------------------------------
@@ -166,8 +167,4 @@ if __name__ == "__main__":
 
     result = predict_shipment(example)
 
-    print("\nSUPPLYPRESCRIPT SHIPMENT PREDICTION")
-    print("-" * 45)
-
-    for key, value in result.items():
-        print(f"{key}: {value}")
+    print(json.dumps(result))
