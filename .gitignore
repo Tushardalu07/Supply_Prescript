@@ -1,4 +1,4 @@
-
+@'
 # Python
 .venv/
 __pycache__/
@@ -23,8 +23,10 @@ ml/reports/*
 !ml/artifacts/.gitkeep
 !ml/reports/.gitkeep
 
+# Keep ML evaluation documentation
+!ml/reports/model_evaluation.md
+
 # Node
 frontend/node_modules/
 frontend/dist/
-
-!ml/reports/model_evaluation.md
+'@ | Set-Content -Path .gitignore -Encoding utf8

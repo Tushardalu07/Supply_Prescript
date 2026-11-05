@@ -1,21 +1,48 @@
 import axios from "axios";
-import { alerts, recommendations, outcomes } from "../mock/data";
 
-const USE_MOCK = true;
-const BASE_URL = "http://localhost:8000/api";
+const BASE_URL = "http://localhost:8000";
 
-export const getAlerts = async () =>
-  USE_MOCK ? alerts : (await axios.get(`${BASE_URL}/shipments/alerts`)).data;
+// Fetch shipments for Dashboard
+export const getAlerts = async () => {
+  const response = await axios.get(BASE_URL + "/shipments");
+  return response.data.shipments;
+};
 
-export const getRecommendations = async (id) =>
-  USE_MOCK
-    ? { options: recommendations[id] || [] }
-    : (await axios.get(`${BASE_URL}/shipments/${id}/recommendations`)).data;
+export const getShipments = async () => {
+  const response = await axios.get(BASE_URL + "/shipments");
+  return response.data;
+};
 
-export const executeDecision = async (shipment_id, option_id) =>
-  USE_MOCK
-    ? { status: "success", shipment_id, option_id }
-    : (await axios.post(`${BASE_URL}/decisions/execute`, { shipment_id, option_id })).data;
+// Create a shipment
+export const createShipment = async (shipment) => {
+  const response = await axios.post(BASE_URL + "/shipments", shipment);
+  return response.data;
+};
 
-export const getOutcomes = async () =>
-  USE_MOCK ? outcomes : (await axios.get(`${BASE_URL}/decisions/outcomes`)).data;
+// Fetch recommendations
+export const getRecommendations = async (id) => {
+  const response = await axios.get(
+    BASE_URL + "/shipments/" + encodeURIComponent(id) + "/recommendations"
+  );
+  return response.data;
+};
+
+// Execute selected decision
+export const executeDecision = async (id, decisionId) => {
+  const response = await axios.post(
+    BASE_URL + "/shipments/" + encodeURIComponent(id) + "/execute",
+    { decision_id: decisionId }
+  );
+  return response.data;
+};
+
+// Fetch decision outcomes for Analytics
+export const getOutcomes = async () => {
+  try {
+    const response = await axios.get(BASE_URL + "/outcomes");
+    return response.data.outcomes || [];
+  } catch (error) {
+    console.error("Unable to fetch decision outcomes:", error);
+    return [];
+  }
+};
