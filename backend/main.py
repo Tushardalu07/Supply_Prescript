@@ -5,8 +5,13 @@ from pydantic import BaseModel, Field
 import psycopg
 
 from backend.database import get_db_connection
+from backend.optimization import ActionOption, recommend_actions
 
 app = FastAPI(title="Supply Prescript API")
+
+# Initial demo assumptions, using the same numeric units as action costs.
+DEFAULT_RECOMMENDATION_BUDGET = 15000
+DEFAULT_MAX_DELIVERY_DAYS = 14
 
 app.add_middleware(
     CORSMiddleware,
@@ -140,11 +145,15 @@ class ActualOutcomeRequest(BaseModel):
 # Baseline recommendation options
 # These are sample rules, not ML predictions.
 
-def get_recommendation_options(shipment):
+def get_recommendation_options(
+    shipment,
+    budget=DEFAULT_RECOMMENDATION_BUDGET,
+    max_delivery_days=DEFAULT_MAX_DELIVERY_DAYS,
+):
     shipping_days = shipment["shipping_days"]
     expected_days = shipment["expected_days"]
 
-    return [
+    options = [
         {
             "id": 1,
             "type": "Air Freight",
@@ -167,6 +176,24 @@ def get_recommendation_options(shipment):
             "score": 0.55
         }
     ]
+    action_options = [
+        ActionOption(
+            id=option["id"],
+            type=option["type"],
+            extra_cost=option["extra_cost"],
+            delivery_days=option["delivery_days"],
+        )
+        for option in options
+    ]
+    recommended_ids = {
+        option.id
+        for option in recommend_actions(
+            action_options,
+            budget=budget,
+            max_delivery_days=max_delivery_days,
+        )
+    }
+    return [option for option in options if option["id"] in recommended_ids]
 
 
 # 1. Get recommendations
