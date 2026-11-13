@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 import psycopg
+from typing import Any
+from ml.src.predict import predict_shipment, EXPECTED_FEATURES
 
 from backend.database import get_db_connection
 
@@ -21,6 +23,8 @@ class ShipmentCreate(BaseModel):
     shipping_days: int = Field(gt=0)
     expected_days: int = Field(gt=0)
 
+class ShipmentPredictionRequest(BaseModel):
+    shipment: dict[str, Any]
 
 @app.get("/")
 def home():
@@ -346,4 +350,27 @@ def update_actual_outcome(
         raise HTTPException(
             status_code=500,
             detail="Database error while updating outcome"
+        )
+@app.post("/predict")
+def predict_shipment_endpoint(
+    request: ShipmentPredictionRequest
+):
+    try:
+        result = predict_shipment(request.shipment)
+
+        return {
+            "status": "success",
+            "prediction": result
+        }
+
+    except (ValueError, TypeError) as error:
+        raise HTTPException(
+            status_code=422,
+            detail=str(error)
+        )
+
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="Shipment prediction failed"
         )
