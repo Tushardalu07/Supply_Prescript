@@ -49,6 +49,35 @@ def test_recommendations_endpoint_returns_optimized_options(monkeypatch):
     ]
 
 
+def test_recommendations_endpoint_applies_custom_constraints(monkeypatch):
+    monkeypatch.setattr(main, "get_db_connection", FakeConnection)
+
+    response = TestClient(main.app).get(
+        "/shipments/SH-TEST/recommendations",
+        params={"budget": 10000, "max_delivery_days": 5},
+    )
+
+    assert response.status_code == 200
+    assert [option["type"] for option in response.json()["options"]] == [
+        "Secondary Supplier"
+    ]
+
+
+def test_recommendations_endpoint_rejects_negative_constraints():
+    client = TestClient(main.app)
+
+    for params in (
+        {"budget": -1},
+        {"max_delivery_days": -1},
+    ):
+        response = client.get(
+            "/shipments/SH-TEST/recommendations",
+            params=params,
+        )
+
+        assert response.status_code == 422
+
+
 def test_execute_rejects_an_action_excluded_by_constraints(monkeypatch):
     monkeypatch.setattr(
         main,
@@ -59,6 +88,18 @@ def test_execute_rejects_an_action_excluded_by_constraints(monkeypatch):
     response = TestClient(main.app).post(
         "/shipments/SH-TEST/execute",
         json={"decision_id": 3},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Recommendation not found"
+
+
+def test_execute_uses_the_supplied_constraints(monkeypatch):
+    monkeypatch.setattr(main, "get_db_connection", FakeConnection)
+
+    response = TestClient(main.app).post(
+        "/shipments/SH-TEST/execute?max_delivery_days=1",
+        json={"decision_id": 1},
     )
 
     assert response.status_code == 404

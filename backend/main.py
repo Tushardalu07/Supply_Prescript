@@ -1,6 +1,6 @@
 from fastapi.middleware.cors import CORSMiddleware
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 import psycopg
 
@@ -199,7 +199,18 @@ def get_recommendation_options(
 # 1. Get recommendations
 
 @app.get("/shipments/{shipment_id}/recommendations")
-def get_recommendations(shipment_id: str):
+def get_recommendations(
+    shipment_id: str,
+    budget: float = Query(
+        default=DEFAULT_RECOMMENDATION_BUDGET,
+        ge=0,
+        allow_inf_nan=False,
+    ),
+    max_delivery_days: int = Query(
+        default=DEFAULT_MAX_DELIVERY_DAYS,
+        ge=0,
+    ),
+):
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cur:
@@ -222,7 +233,11 @@ def get_recommendations(shipment_id: str):
 
         return {
             "shipment_id": shipment_id,
-            "options": get_recommendation_options(shipment),
+            "options": get_recommendation_options(
+                shipment,
+                budget=budget,
+                max_delivery_days=max_delivery_days,
+            ),
             "note": "Baseline sample recommendations; ML model not connected yet."
         }
 
@@ -233,7 +248,19 @@ def get_recommendations(shipment_id: str):
 # 2. Execute and save a decision
 
 @app.post("/shipments/{shipment_id}/execute")
-def execute_decision(shipment_id: str, request: ExecuteDecisionRequest):
+def execute_decision(
+    shipment_id: str,
+    request: ExecuteDecisionRequest,
+    budget: float = Query(
+        default=DEFAULT_RECOMMENDATION_BUDGET,
+        ge=0,
+        allow_inf_nan=False,
+    ),
+    max_delivery_days: int = Query(
+        default=DEFAULT_MAX_DELIVERY_DAYS,
+        ge=0,
+    ),
+):
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cur:
@@ -254,7 +281,11 @@ def execute_decision(shipment_id: str, request: ExecuteDecisionRequest):
                     "expected_days": row[2]
                 }
 
-                options = get_recommendation_options(shipment)
+                options = get_recommendation_options(
+                    shipment,
+                    budget=budget,
+                    max_delivery_days=max_delivery_days,
+                )
 
                 selected = next(
                     (option for option in options
