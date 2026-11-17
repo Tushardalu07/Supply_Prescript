@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, Plane, Factory, CalendarClock, Sparkles, Rocket, CheckCircle2 } from "lucide-react";
+import { ArrowLeft, Plane, Factory, CalendarClock, Rocket, CheckCircle2 } from "lucide-react";
 import { getRecommendations, executeDecision } from "../services/api";
 
 const icons = { "Air Freight": Plane, "Secondary Supplier": Factory, "Delay Launch": CalendarClock };
@@ -17,7 +17,6 @@ export default function ShipmentDetail() {
 
   useEffect(() => { getRecommendations(id).then((d) => setOptions(d.options)); }, [id]);
 
-  const best = options.length ? Math.max(...options.map((o) => o.score)) : 0;
   const chosen = options.find((o) => o.id === selected);
 
   const run = async () => {
@@ -31,7 +30,7 @@ export default function ShipmentDetail() {
     <>
       <Link to="/" className="back"><ArrowLeft size={16} /> Back to alerts</Link>
       <h1 className="page-title">Recommendations for {id}</h1>
-      <p className="sub">Compare cost and delivery time, then pick an action</p>
+      <p className="sub">Choose from feasible options that balance cost and delivery time</p>
 
       <div className="options">
         {options.map((o, i) => {
@@ -41,11 +40,10 @@ export default function ShipmentDetail() {
               initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.12 }}
               whileHover={{ y: -6, scale: 1.02 }} whileTap={{ scale: 0.98 }}
               onClick={() => !done && setSelected(o.id)}>
-              {o.score === best && <div className="tag"><Sparkles size={12} /> Best match</div>}
+              <div className="tag">Pareto option</div>
               <h3><span className="o-icon"><Icon size={22} /></span> {o.type}</h3>
               <div className="row"><span>Extra cost</span><b>₹{o.extra_cost.toLocaleString("en-IN")}</b></div>
               <div className="row"><span>Delivery time</span><b>{o.delivery_days} {o.delivery_days === 1 ? "day" : "days"}</b></div>
-              <div className="row"><span>Score</span><b>{Math.round(o.score * 100)}/100</b></div>
             </motion.div>
           );
         })}

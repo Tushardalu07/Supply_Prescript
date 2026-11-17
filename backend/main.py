@@ -1,12 +1,17 @@
 from fastapi.middleware.cors import CORSMiddleware
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 import psycopg
 
 from backend.database import get_db_connection
+from backend.optimization import ActionOption, recommend_actions
 
 app = FastAPI(title="Supply Prescript API")
+
+# Initial demo assumptions, using the same numeric units as action costs.
+DEFAULT_RECOMMENDATION_BUDGET = 15000
+DEFAULT_MAX_DELIVERY_DAYS = 14
 
 app.add_middleware(
     CORSMiddleware,
@@ -140,11 +145,15 @@ class ActualOutcomeRequest(BaseModel):
 # Baseline recommendation options
 # These are sample rules, not ML predictions.
 
-def get_recommendation_options(shipment):
+def get_recommendation_options(
+    shipment,
+    budget=DEFAULT_RECOMMENDATION_BUDGET,
+    max_delivery_days=DEFAULT_MAX_DELIVERY_DAYS,
+):
     shipping_days = shipment["shipping_days"]
     expected_days = shipment["expected_days"]
 
-    return [
+    options = [
         {
             "id": 1,
             "type": "Air Freight",
@@ -167,12 +176,41 @@ def get_recommendation_options(shipment):
             "score": 0.55
         }
     ]
+    action_options = [
+        ActionOption(
+            id=option["id"],
+            type=option["type"],
+            extra_cost=option["extra_cost"],
+            delivery_days=option["delivery_days"],
+        )
+        for option in options
+    ]
+    recommended_ids = {
+        option.id
+        for option in recommend_actions(
+            action_options,
+            budget=budget,
+            max_delivery_days=max_delivery_days,
+        )
+    }
+    return [option for option in options if option["id"] in recommended_ids]
 
 
 # 1. Get recommendations
 
 @app.get("/shipments/{shipment_id}/recommendations")
-def get_recommendations(shipment_id: str):
+def get_recommendations(
+    shipment_id: str,
+    budget: float = Query(
+        default=DEFAULT_RECOMMENDATION_BUDGET,
+        ge=0,
+        allow_inf_nan=False,
+    ),
+    max_delivery_days: int = Query(
+        default=DEFAULT_MAX_DELIVERY_DAYS,
+        ge=0,
+    ),
+):
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cur:
@@ -195,7 +233,11 @@ def get_recommendations(shipment_id: str):
 
         return {
             "shipment_id": shipment_id,
-            "options": get_recommendation_options(shipment),
+            "options": get_recommendation_options(
+                shipment,
+                budget=budget,
+                max_delivery_days=max_delivery_days,
+            ),
             "note": "Baseline sample recommendations; ML model not connected yet."
         }
 
@@ -206,7 +248,19 @@ def get_recommendations(shipment_id: str):
 # 2. Execute and save a decision
 
 @app.post("/shipments/{shipment_id}/execute")
-def execute_decision(shipment_id: str, request: ExecuteDecisionRequest):
+def execute_decision(
+    shipment_id: str,
+    request: ExecuteDecisionRequest,
+    budget: float = Query(
+        default=DEFAULT_RECOMMENDATION_BUDGET,
+        ge=0,
+        allow_inf_nan=False,
+    ),
+    max_delivery_days: int = Query(
+        default=DEFAULT_MAX_DELIVERY_DAYS,
+        ge=0,
+    ),
+):
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cur:
@@ -227,7 +281,11 @@ def execute_decision(shipment_id: str, request: ExecuteDecisionRequest):
                     "expected_days": row[2]
                 }
 
-                options = get_recommendation_options(shipment)
+                options = get_recommendation_options(
+                    shipment,
+                    budget=budget,
+                    max_delivery_days=max_delivery_days,
+                )
 
                 selected = next(
                     (option for option in options
