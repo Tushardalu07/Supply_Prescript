@@ -4,6 +4,7 @@ from backend.optimization import (
     filter_pareto_optimal_actions,
     recommend_actions,
 )
+from backend.main import get_recommendation_options
 
 
 def test_keeps_action_within_budget_and_deadline():
@@ -79,3 +80,30 @@ def test_recommends_no_actions_when_none_are_feasible():
     ]
 
     assert recommend_actions(options, budget=10000, max_delivery_days=3) == []
+
+
+def test_api_recommendations_apply_budget_and_delivery_constraints():
+    shipment = {"shipping_days": 14, "expected_days": 14}
+
+    recommendations = get_recommendation_options(
+        shipment,
+        budget=10000,
+        max_delivery_days=5,
+    )
+
+    assert [option["type"] for option in recommendations] == [
+        "Secondary Supplier"
+    ]
+
+
+def test_api_recommendations_use_explicit_default_assumptions():
+    shipment = {"shipping_days": 14, "expected_days": 14}
+
+    recommendations = get_recommendation_options(shipment)
+
+    assert [option["type"] for option in recommendations] == [
+        "Air Freight",
+        "Secondary Supplier",
+        "Delay Launch",
+    ]
+    assert all("score" in option for option in recommendations)
