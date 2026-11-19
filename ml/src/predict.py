@@ -1,6 +1,7 @@
 
 from pathlib import Path
 import json
+import math
 
 import joblib
 import pandas as pd
@@ -27,6 +28,7 @@ with open(METADATA_PATH, "r", encoding="utf-8") as file:
     metadata = json.load(file)
 
 MODEL_VERSION = metadata["model_version"]
+
 CLASSIFICATION_THRESHOLD = float(
     metadata["classification_threshold"]
 )
@@ -48,7 +50,7 @@ classifier = joblib.load(CLASSIFIER_PATH)
 regressor = joblib.load(REGRESSOR_PATH)
 
 
-# Verify that saved models use the metadata feature schema.
+# Verify saved models use the metadata feature schema.
 for model_name, model in [
     ("classifier", classifier),
     ("regressor", regressor),
@@ -67,7 +69,7 @@ for model_name, model in [
 # ---------------------------------------------------------
 
 def validate_shipment(shipment: dict) -> dict:
-    """Validate and arrange input using the training feature schema."""
+    """Validate shipment input and arrange training features."""
 
     if not isinstance(shipment, dict):
         raise TypeError(
@@ -83,6 +85,19 @@ def validate_shipment(shipment: dict) -> dict:
     if missing:
         raise ValueError(
             f"Missing required shipment features: {missing}"
+        )
+
+    # Validate shipment quantity.
+    quantity = shipment["Order Item Quantity"]
+
+    if (
+        isinstance(quantity, bool)
+        or not isinstance(quantity, (int, float))
+        or not math.isfinite(float(quantity))
+        or quantity <= 0
+    ):
+        raise ValueError(
+            "Order Item Quantity must be a positive number."
         )
 
     return {
@@ -110,7 +125,7 @@ def predict_shipment(shipment: dict) -> dict:
         classifier.predict_proba(row)[0, 1]
     )
 
-    # Apply the threshold selected using validation data.
+    # Apply threshold selected using validation data.
     predicted_late_risk = int(
         probability >= CLASSIFICATION_THRESHOLD
     )
@@ -121,7 +136,7 @@ def predict_shipment(shipment: dict) -> dict:
         float(regressor.predict(row)[0]),
     )
 
-    # Risk categories aligned with the classification threshold.
+    # Risk categories.
     if probability >= 0.70:
         risk = "High"
     elif probability >= CLASSIFICATION_THRESHOLD:
@@ -137,7 +152,6 @@ def predict_shipment(shipment: dict) -> dict:
         "risk_category": risk,
         "model_version": MODEL_VERSION,
     }
-
 
 
 # ---------------------------------------------------------
@@ -167,4 +181,5 @@ if __name__ == "__main__":
 
     result = predict_shipment(example)
 
+    # Keep JSON output on a single line for existing tests.
     print(json.dumps(result))
