@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const BASE_URL = "http://localhost:8000";
+const BASE_URL = "http://localhost:8001";
 
 // Fetch shipments for Dashboard
 export const getAlerts = async () => {
